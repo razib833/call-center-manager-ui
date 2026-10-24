@@ -1,0 +1,30 @@
+import {fireEvent,render,screen,waitFor,within} from '@testing-library/react';
+import {it,expect,vi} from 'vitest';
+import {MemoryRouter} from 'react-router-dom';
+import {QueryClient,QueryClientProvider} from '@tanstack/react-query';
+import {AuthProvider} from '../src/auth';
+import {App} from '../src/App';
+import {MockManagerClient} from '../src/mock';
+it('uses allowed statuses, requires completion remarks and sends the row version',async()=>{
+ const p=new MockManagerClient();await p.developmentLogin();const original=p.ticket.bind(p);
+ vi.spyOn(p,'ticket').mockImplementation(async(...args)=>{const t=await original(...args);return {...t,rows1:t.rows1?.map(r=>({...r,approvalStatus:'APPROVED',currentStatusID:4}))};});
+ vi.spyOn(p,'transitions').mockResolvedValue([{toStatusID:7,statusCode:'COMPLETED',statusName:'Completed',requiresRemarks:true}]);const update=vi.spyOn(p,'updateStatus').mockResolvedValue();
+ render(<QueryClientProvider client={new QueryClient({defaultOptions:{queries:{retry:false,gcTime:0}}})}><AuthProvider client={p}><MemoryRouter initialEntries={['/tickets/7001']}><App/></MemoryRouter></AuthProvider></QueryClientProvider>);
+ const button=await screen.findByRole('button',{name:'Mark as Completed'});await waitFor(()=>expect(button).toBeEnabled());fireEvent.click(button);
+ const dialog=screen.getByRole('dialog',{name:'Update Ticket Status'});const comments=within(dialog).getByLabelText('Remarks / Comments *');expect(comments).toBeRequired();expect(within(dialog).getByLabelText('Next Follow-up Date (Optional)')).toBeDisabled();
+ fireEvent.change(comments,{target:{value:'Completed synthetic test.'}});fireEvent.click(within(dialog).getByRole('button',{name:'Update Status'}));await waitFor(()=>expect(update).toHaveBeenCalledOnce());expect(update).toHaveBeenCalledWith(7001,'AAAAAAAAAAE=',7,'Completed synthetic test.');
+});
+it('opens forwarding on a pending ticket and explicitly approves before forwarding',async()=>{
+ const p=new MockManagerClient();await p.developmentLogin();const approve=vi.spyOn(p,'decide'),forward=vi.spyOn(p,'forwardEmail').mockResolvedValue();
+ render(<QueryClientProvider client={new QueryClient({defaultOptions:{queries:{retry:false,gcTime:0}}})}><AuthProvider client={p}><MemoryRouter initialEntries={['/tickets/7001']}><App/></MemoryRouter></AuthProvider></QueryClientProvider>);
+ const open=await screen.findByRole('button',{name:'Send to Branch (with Email)'});await waitFor(()=>expect(open).toBeEnabled());fireEvent.click(open);
+ const dialog=screen.getByRole('dialog',{name:'Send to Branch (with Email)'});
+ fireEvent.change(within(dialog).getByLabelText('Destination Branch *'),{target:{value:'Synthetic Branch'}});
+ fireEvent.change(within(dialog).getByLabelText('Recipient Email (To) *'),{target:{value:'branch@example.invalid'}});
+ expect(approve).not.toHaveBeenCalled();expect(forward).not.toHaveBeenCalled();
+ fireEvent.click(within(dialog).getByRole('button',{name:'Approve request to continue'}));
+ await waitFor(()=>expect(approve).toHaveBeenCalledOnce());await within(dialog).findByRole('button',{name:'Queue Email & Forward'});
+ expect(forward).not.toHaveBeenCalled();expect(within(dialog).getByLabelText('Destination Branch *')).toHaveValue('Synthetic Branch');
+ fireEvent.click(within(dialog).getByRole('button',{name:'Queue Email & Forward'}));
+ await waitFor(()=>expect(forward).toHaveBeenCalledOnce());expect(forward.mock.calls[0][0]).toMatchObject({requestID:7001,forwardingType:'BRANCH',destinationName:'Synthetic Branch',toAddresses:'branch@example.invalid'});
+});

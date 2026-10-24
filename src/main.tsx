@@ -1,0 +1,14 @@
+import {createRoot} from 'react-dom/client';
+import {BrowserRouter} from 'react-router-dom';
+import {QueryClient,QueryClientProvider} from '@tanstack/react-query';
+import {AuthProvider} from './auth';
+import {App} from './App';
+import {LiveManagerClient} from './api';
+import {MockManagerClient} from './mock';
+import './styles.css';
+const mode=import.meta.env.VITE_MANAGER_MODE||'LIVE';
+if(!['LIVE','MOCK'].includes(mode))throw Error('Choose LIVE or MOCK Manager mode.');
+if(mode==='MOCK'&&(!import.meta.env.DEV||!['localhost','127.0.0.1','[::1]'].includes(location.hostname)))throw Error('Manager MOCK preview is restricted to explicit local development.');
+const client=mode==='MOCK'?new MockManagerClient():new LiveManagerClient();
+const query=new QueryClient({defaultOptions:{queries:{retry:false,refetchOnWindowFocus:false,staleTime:30000},mutations:{retry:false}}});
+createRoot(document.getElementById('root')!).render(<QueryClientProvider client={query}><AuthProvider client={client}><BrowserRouter basename="/manager"><App/></BrowserRouter></AuthProvider></QueryClientProvider>);
